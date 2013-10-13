@@ -1,0 +1,99 @@
+#!/bin/bash
+ 
+# Copyright 2008, 2010 Guy Rutenberg <http://www.guyrutenberg.com/contact-me>
+# WordPress FTP backup 2.0
+#
+# Easily backup wordpress instances via ftp.
+#
+# Change Log:
+# ===========
+# 2.0:
+#  - Auto-detect database settings.
+#  - Exclude cache data from backups.
+ 
+BACKUP_DIR=
+FTP_HOST=
+FTP_USER=
+FTP_PASS=
+FTP_BACKUP_DIR=
+ 
+# end of configuration - you probably don't need to touch anything below
+ 
+PROG=`basename "$0"`
+print_usage () {
+    echo "USAGE: ${PROG} [options] BLOG_ROOT"
+    echo "Backup a WordPress blog"
+}
+ 
+print_help ()  {
+    print_usage
+    cat << EOF
+ 
+Options:
+    -h, --help          show this help message and exit
+ 
+EOF
+}
+ 
+TEMP=`getopt -o h --long help -n "$PROG" -- "$@"`
+if (($?)); then
+    print_usage
+    exit 1
+fi
+ 
+eval set -- "$TEMP"
+ 
+while true ; do
+    case "$1" in
+        -h|--help) print_help; exit ;;
+        --) shift; break;;
+    esac
+done
+ 
+if [ -z "$1" ]
+then
+ print_usage > /dev/stderr
+ exit 1
+fi
+ 
+BLOG_DIR=$1
+DB_NAME=`echo "<?php require_once(\"${BLOG_DIR}/wp-config.php\"); echo DB_NAME;" | php`
+DB_USER=`echo "<?php require_once(\"${BLOG_DIR}/wp-config.php\"); echo DB_USER;" | php`
+DB_PASS=`echo "<?php require_once(\"${BLOG_DIR}/wp-config.php\"); echo DB_PASSWORD;" | php`
+DB_HOST=`echo "<?php require_once(\"${BLOG_DIR}/wp-config.php\"); echo DB_HOST;" | php`
+ 
+BLOG_DIR=`dirname "$BLOG_DIR"`/`basename "$BLOG_DIR"`
+BACKUP_DIR=`dirname "$BACKUP_DIR"`/`basename "$BACKUP_DIR"`
+ 
+echo -n "dumping database... "
+DUMP_NAME=${DB_NAME}-$(date +%Y%m%d).sql.bz2
+mysqldump --user=${DB_USER} --password=${DB_PASS} --host=${DB_HOST} \
+ --databases ${DB_NAME} \
+ | bzip2 -c > ${BACKUP_DIR}/${DUMP_NAME}
+if [ "$?" -ne "0" ]; then
+	echo "failed!"
+	exit 1
+fi
+echo "done"
+ 
+echo -n "Creating tarball... "
+TAR_NAME=${BLOG_DIR##*/}-$(date +%Y%m%d).tar.bz2
+tar -cjf ${BACKUP_DIR}/${BLOG_DIR##*/}-$(date +%Y%m%d).tar.bz2 --exclude cache ${BLOG_DIR}
+if [ "$?" -ne "0" ]; then
+	echo "failed!"
+	exit 2
+fi
+echo "done"
+ 
+echo -n "Uploading SQL dump and tarball to FTP... "
+lftp -u ${FTP_USER},${FTP_PASS} ${FTP_HOST} <<EOF
+cd "${FTP_BACKUP_DIR}"
+put "${BACKUP_DIR}/${DUMP_NAME}"
+put "${BACKUP_DIR}/${TAR_NAME}"
+ 
+EOF
+if [ "$?" -ne "0" ]; then
+	echo "failed!"
+	exit 3
+fi
+echo "done"
